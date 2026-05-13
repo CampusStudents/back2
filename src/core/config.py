@@ -1,0 +1,214 @@
+import logging
+import multiprocessing
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
+
+LOG_DEFAULT_FORMAT = (
+    "[%(asctime)s.%(msecs)03d] %(module)10s:%(lineno)-3d %(levelname)-7s - %(message)s"
+)
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def configure_logging(
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO",
+) -> None:
+    """Configure base logging for the application."""
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format=LOG_DEFAULT_FORMAT,
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+class RunConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 8000
+
+
+class GunicornConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8000
+    workers: int = multiprocessing.cpu_count() * 2 + 1
+    worker_class: str = "uvicorn.workers.UvicornWorker"
+    worker_connections: int = 1000
+    keepalive: int = 5
+    max_requests: int = 1000
+    max_requests_jitter: int = 50
+    timeout: int = 30
+    graceful_timeout: int = 30
+    reload: bool = False
+    preload_app: bool = True
+    access_log_format: str = (
+        '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
+    )
+
+
+class ApiV1Prefix(BaseModel):
+    prefix: str = "/v1"
+    applications: str = "/applications"
+    users: str = "/users"
+    auth: str = "/auth"
+    cities: str = "/cities"
+    skills: str = "/skills"
+    team_roles: str = "/team-roles"
+    universities: str = "/universities"
+    projects: str = "/projects"
+
+
+class ApiPrefix(BaseModel):
+    prefix: str = "/api"
+    v1: ApiV1Prefix = ApiV1Prefix()
+
+
+class AuthConfig(BaseModel):
+    private_key_path: Path = BASE_DIR / "src" / "certs" / "jwt-private.pem"
+    public_key_path: Path = BASE_DIR / "src" / "certs" / "jwt-public.pem"
+    algorithm: str = "RS256"
+    refresh_token_expire_days: int = 30
+    access_token_expire_minutes: int = 15
+    access_token_type: str = "access"
+    refresh_token_type: str = "refresh"
+    token_version_field: str = "token_version"
+
+
+class RBACConfig(BaseModel):
+    initial_subjects: list[str] = [
+        "users",
+        "cities",
+        "skills",
+        "team_roles",
+        "universities",
+        "user_profiles",
+        "applications",
+        "projects",
+        "project_vacancies",
+    ]
+    initial_actions: list[str] = [
+        "detail",
+        "list",
+        "create",
+        "update",
+        "delete",
+    ]
+    initial_permission_schema: dict[str, list[str]] = {
+        "admin": ["*"],
+        "public": [
+            "auth:login",
+            "auth:register",
+            "auth:refresh",
+            "auth:verify",
+            "auth:forgot_password",
+            "auth:reset_password",
+        ],
+        "user": [
+            "auth:me",
+            "auth:logout",
+            "auth:change_password",
+            "auth:quit_all",
+            "auth:resend_verification",
+            "cities:list",
+            "cities:detail",
+            "skills:list",
+            "skills:detail",
+            "team_roles:list",
+            "team_roles:detail",
+            "universities:list",
+            "universities:detail",
+            "user_profiles:detail",
+            "user_profiles:create",
+            "user_profiles:update",
+            "applications:list",
+            "applications:create",
+            "applications:update",
+            "applications:withdraw",
+            "projects:list",
+            "projects:detail",
+            "projects:create",
+            "projects:update",
+            "projects:delete",
+            "project_vacancies:list",
+            "project_vacancies:detail",
+            "project_vacancies:create",
+            "project_vacancies:update",
+            "project_vacancies:delete",
+        ],
+    }
+    admin_email: str = "admin@example.com"
+    admin_password: str = "admin"
+    public_role_name: str = "public"
+    admin_role_name: str = "admin"
+
+
+class EmailConfig(BaseModel):
+    smtp_host: str = "maildev"
+    smtp_port: int = 1025
+    from_email: str = "campus@mail.ru"
+
+
+class RateLimitConfig(BaseModel):
+    auth_login: str = "5/minute"
+    auth_register: str = "3/minute"
+    auth_refresh: str = "30/minute"
+    auth_verify: str = "10/minute"
+    auth_resend_verification: str = "3/hour"
+    auth_forgot_password: str = "3/hour"
+    auth_reset_password: str = "5/hour"
+    auth_change_password: str = "5/hour"
+
+
+class DatabaseConfig(BaseModel):
+    drivername: str = "postgresql+asyncpg"
+    user: str
+    password: str
+    name: str
+    host: str
+    port: int
+    echo: bool = False
+    pool_size: int = 50
+    echo_pool: bool = False
+    max_overflow: int = 10
+    naming_convention: dict[str, str] = {
+        "ix": "ix_%(column_0_label)s",
+        "uq": "uq_%(table_name)s_%(column_0_name)s",
+        "ck": "ck_%(table_name)s_%(constraint_name)s",
+        "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+        "pk": "pk_%(table_name)s",
+    }
+
+    @property
+    def url(self) -> URL:
+        return URL.create(
+            drivername=self.drivername,
+            username=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            database=self.name,
+        )
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+        env_nested_delimiter="__",
+        env_prefix="APP__",
+    )
+    run: RunConfig = RunConfig()
+    gunicorn: GunicornConfig = GunicornConfig()
+    api: ApiPrefix = ApiPrefix()
+    auth: AuthConfig = AuthConfig()
+    rbac: RBACConfig
+    email: EmailConfig = EmailConfig()
+    rate_limit: RateLimitConfig = RateLimitConfig()
+    db: DatabaseConfig
+    app_url: str = "127.0.0.1:8000"
+
+
+settings = Settings()
